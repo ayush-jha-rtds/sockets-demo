@@ -1,7 +1,6 @@
-import React, { useState, useEffect, useRef, useCallback } from "react";
+import { useState, useEffect, useRef, useCallback } from "react";
 import { useParams, useNavigate } from "react-router-dom";
 import {
-  Cloud,
   Trash2,
   Wifi,
   WifiOff,
@@ -39,7 +38,7 @@ export default function InstanceLogs() {
   const [isWebSocketAborted, setIsWebSocketAborted] = useState(false);
 
   const consoleRef = useRef<HTMLDivElement>(null);
-  const intervalRef = useRef<NodeJS.Timeout | null>(null);
+  const intervalRef = useRef<number | null>(null);
   const eventSourceRef = useRef<EventSource | null>(null);
   const socketRef = useRef<Socket | null>(null);
   const isLongPollingRef = useRef(false);
@@ -67,7 +66,15 @@ export default function InstanceLogs() {
   );
 
   const addLogsFromResponse = useCallback(
-    (responseData: any, replace: boolean = false) => {
+    (
+      responseData: {
+        message: string;
+        id: string;
+        timestamp: string;
+        level: "info" | "warn" | "error" | "debug" | undefined;
+      },
+      replace: boolean = false
+    ) => {
       if (Array.isArray(responseData)) {
         const newLogs: LogMessage[] = [];
 
@@ -242,16 +249,19 @@ export default function InstanceLogs() {
         // Stop long polling after receiving the first response
         isLongPollingRef.current = false;
         addLog("Long polling completed - data received", "info");
-      } catch (error: any) {
-        if (error.name === "AbortError" || !isLongPollingRef.current) {
-          return;
+      } catch (error: unknown) {
+        if (error instanceof Error) {
+          if (error.name === "AbortError" || !isLongPollingRef.current) {
+            return;
+          }
         }
 
         console.error("Long polling error:", error);
         addLog("Long polling error: Connection failed", "error");
 
         if (
-          error.code !== "ECONNABORTED" &&
+          error instanceof Error &&
+          (error as { code?: string }).code !== "ECONNABORTED" &&
           !error.message.includes("timeout")
         ) {
           setConnectionStatus((prev) => ({ ...prev, connected: false }));
@@ -308,7 +318,7 @@ export default function InstanceLogs() {
         setConnectionStatus((prev) => ({ ...prev, connected: false }));
       };
 
-      eventSource.addEventListener("log", (event: any) => {
+      eventSource.addEventListener("log", (event: MessageEvent) => {
         try {
           const data = JSON.parse(event.data);
           addLogsFromResponse(data);
@@ -400,9 +410,8 @@ export default function InstanceLogs() {
         console.error("❌ WebSocket connection error:", error);
         console.error("Error details:", {
           message: error.message,
-          description: error.description,
-          context: error.context,
-          type: error.type,
+          name: error.name,
+          stack: error.stack,
         });
         addLog(`WebSocket connection failed: ${error.message}`, "error");
         setConnectionStatus((prev) => ({ ...prev, connected: false }));
