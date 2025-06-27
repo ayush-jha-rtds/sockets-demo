@@ -11,6 +11,8 @@ interface UseLongPollingProps {
     status: ConnectionStatus | ((prev: ConnectionStatus) => ConnectionStatus)
   ) => void;
   setIsLongPollingLoading: (loading: boolean) => void;
+  maxRetries?: number;
+  retryDelay?: number;
 }
 
 export const useLongPolling = ({
@@ -20,12 +22,17 @@ export const useLongPolling = ({
   addLogsFromResponse,
   setConnectionStatus,
   setIsLongPollingLoading,
+  maxRetries = 1000,
+  retryDelay = 1000,
 }: UseLongPollingProps) => {
   const isLongPollingRef = useRef(false);
   const abortControllerRef = useRef<AbortController | null>(null);
+  const retryCountRef = useRef(0);
+  const retryTimeoutRef = useRef<number | null>(null);
 
   const startLongPolling = useCallback(() => {
     isLongPollingRef.current = true;
+    retryCountRef.current = 0;
 
     const longPoll = async () => {
       if (!isLongPollingRef.current) return;
@@ -44,6 +51,9 @@ export const useLongPolling = ({
         if (response.data) {
           addLogsFromResponse(response.data);
         }
+
+        // Reset retry count on successful connection
+        retryCountRef.current = 0;
 
         // Only set connected to true after successful response
         setConnectionStatus((prev) => ({
@@ -73,8 +83,26 @@ export const useLongPolling = ({
           setConnectionStatus((prev) => ({ ...prev, connected: false }));
         }
 
-        // Stop long polling on error as well
-        isLongPollingRef.current = false;
+        // Check if we should retry the connection
+        if (retryCountRef.current < maxRetries && isLongPollingRef.current) {
+          retryCountRef.current += 1;
+          const retryMessage = `Long polling failed, retrying (${retryCountRef.current}/${maxRetries})...`;
+          addLog(retryMessage, "warn");
+
+          // Schedule retry after delay
+          retryTimeoutRef.current = setTimeout(() => {
+            if (isLongPollingRef.current) {
+              longPoll();
+            }
+          }, retryDelay);
+        } else if (retryCountRef.current >= maxRetries) {
+          // Max retries reached, stop trying
+          addLog("Long polling failed after maximum retries", "error");
+          isLongPollingRef.current = false;
+        } else {
+          // Connection was manually stopped, don't retry
+          addLog("Long polling stopped manually", "info");
+        }
       } finally {
         setIsLongPollingLoading(false);
       }
@@ -95,10 +123,20 @@ export const useLongPolling = ({
     API_BASE_URL,
     setConnectionStatus,
     setIsLongPollingLoading,
+    maxRetries,
+    retryDelay,
   ]);
 
   const stopLongPolling = useCallback(() => {
     isLongPollingRef.current = false;
+    retryCountRef.current = 0;
+    
+    // Clear any pending retry timeout
+    if (retryTimeoutRef.current) {
+      clearTimeout(retryTimeoutRef.current);
+      retryTimeoutRef.current = null;
+    }
+    
     if (abortControllerRef.current) {
       abortControllerRef.current.abort();
       abortControllerRef.current = null;
