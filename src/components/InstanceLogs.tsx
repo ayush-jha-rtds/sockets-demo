@@ -125,6 +125,8 @@ export default function InstanceLogs() {
         connected: false,
         method: newTransport,
       });
+      
+      clearLogs();
     },
     [cleanupConnections, addLog]
   );
